@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Weekend Calendar</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231a73e8'/%3E%3Crect x='4' y='8' width='24' height='20' rx='2' fill='white'/%3E%3Crect x='4' y='8' width='24' height='6' fill='%23174ea6'/%3E%3Ccircle cx='10' cy='22' r='2' fill='%2334a853'/%3E%3Ccircle cx='16' cy='22' r='2' fill='%23fbbc04'/%3E%3Ccircle cx='22' cy='22' r='2' fill='%23ea4335'/%3E%3C/svg%3E" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button class="icon-btn sidebar-toggle" id="sidebar-toggle" aria-label="Toggle sidebar">
+            <svg viewBox="0 0 24 24" width="24" height="24">
+              <path fill="currentColor" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z" />
+            </svg>
+          </button>
+          <div class="logo" aria-hidden="true">
+            <svg viewBox="0 0 32 32" width="32" height="32">
+              <rect width="32" height="32" rx="6" fill="#1a73e8" />
+              <rect x="4" y="8" width="24" height="20" rx="2" fill="white" />
+              <rect x="4" y="8" width="24" height="6" fill="#174ea6" />
+              <circle cx="10" cy="22" r="2" fill="#34a853" />
+              <circle cx="16" cy="22" r="2" fill="#fbbc04" />
+              <circle cx="22" cy="22" r="2" fill="#ea4335" />
+            </svg>
+          </div>
+          <h1 class="product-name">Weekend Calendar</h1>
+        </div>
+
+        <div class="topbar-nav">
+          <button class="today-btn" id="today-btn">Today</button>
+          <button class="icon-btn" id="prev-btn" aria-label="Previous month">
+            <svg viewBox="0 0 24 24" width="24" height="24">
+              <path fill="currentColor" d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z" />
+            </svg>
+          </button>
+          <button class="icon-btn" id="next-btn" aria-label="Next month">
+            <svg viewBox="0 0 24 24" width="24" height="24">
+              <path fill="currentColor" d="M10 6 8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z" />
+            </svg>
+          </button>
+          <h2 class="month-title" id="month-title">August 2026</h2>
+        </div>
+
+        <div class="topbar-right">
+          <span class="view-chip">Weekends</span>
+          <button class="text-btn" id="connect-btn">Connect Google Calendar</button>
+          <button class="icon-btn" id="settings-btn" aria-label="Settings">
+            <svg viewBox="0 0 24 24" width="24" height="24">
+              <path
+                fill="currentColor"
+                d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.03 7.03 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.24-1.13.55-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.84a.5.5 0 0 0 .12.64l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94L2.83 14.66a.5.5 0 0 0-.12.64l1.92 3.32c.13.22.4.31.6.22l2.39-.96c.5.39 1.04.7 1.63.94l.36 2.54c.05.24.26.42.5.42h3.84c.24 0 .45-.18.5-.42l.36-2.54c.59-.24 1.13-.55 1.63-.94l2.39.96c.22.09.47 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"
+              />
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <div class="shell">
+        <aside class="sidebar" id="sidebar">
+          <div class="mini-cal" id="mini-cal"></div>
+          <div class="cal-list-section">
+            <h3 class="cal-list-title">My calendars</h3>
+            <div class="cal-list" id="cal-list"></div>
+          </div>
+        </aside>
+
+        <main class="main">
+          <div class="demo-banner" id="demo-banner">
+            Showing sample weekends. Connect Google Calendar in Settings to load your events.
+          </div>
+          <div class="grid-head">
+            <div class="dow-row">
+              <div class="dow">FRI</div>
+              <div class="dow">SAT</div>
+              <div class="dow">SUN</div>
+              <div class="gap-head" aria-hidden="true"></div>
+            </div>
+          </div>
+          <div class="weekend-rows" id="weekend-rows"></div>
+        </main>
+      </div>
+    </div>
+
+    <div class="popover hidden" id="popover" role="dialog" aria-modal="true"></div>
+    <div class="modal-backdrop hidden" id="modal-backdrop"></div>
+    <div class="modal hidden" id="settings-modal" role="dialog" aria-labelledby="settings-title">
+      <h2 id="settings-title">Connect Google Calendar</h2>
+      <p>
+        This page reads your calendars in the browser with Google’s
+        <code>calendar.readonly</code> scope. Create an OAuth client in Google Cloud, then paste
+        the client ID here.
+      </p>
+      <ol class="setup-steps">
+        <li>Open <a href="https://console.cloud.google.com/" target="_blank" rel="noopener">Google Cloud Console</a> and create a project.</li>
+        <li>Enable the <strong>Google Calendar API</strong>.</li>
+        <li>Configure the OAuth consent screen (External is fine). Add your Google account as a test user.</li>
+        <li>Create an OAuth client ID of type <strong>Web application</strong>.</li>
+        <li>
+          Under Authorized JavaScript origins, add:
+          <ul>
+            <li><code id="origin-preview"></code></li>
+            <li><code>http://localhost:8000</code></li>
+            <li><code>http://127.0.0.1:8000</code></li>
+          </ul>
+        </li>
+        <li>Paste the client ID below and sign in.</li>
+      </ol>
+      <label class="field-label" for="client-id-input">OAuth client ID</label>
+      <input
+        id="client-id-input"
+        type="text"
+        spellcheck="false"
+        placeholder="123456789-abc.apps.googleusercontent.com"
+      />
+      <div class="modal-actions">
+        <button class="text-btn" id="signout-btn" type="button">Sign out</button>
+        <span class="modal-spacer"></span>
+        <button class="today-btn" id="close-settings-btn" type="button">Close</button>
+        <button class="primary-btn" id="save-connect-btn" type="button">Save &amp; connect</button>
+      </div>
+    </div>
+
+    <script src="./config.js"></script>
+    <script src="./app.js" type="module"></script>
+  </body>
+</html>

@@ -1,0 +1,912 @@
+const STORAGE_CLIENT = "weekend-calendar.clientId";
+const STORAGE_HIDDEN = "weekend-calendar.hiddenCalendars";
+
+const DEMO_CALENDARS = [
+  { id: "work", summary: "Work", backgroundColor: "#039be5", foregroundColor: "#fff" },
+  { id: "family", summary: "Family", backgroundColor: "#8e24aa", foregroundColor: "#fff" },
+  { id: "personal", summary: "Personal", backgroundColor: "#0b8043", foregroundColor: "#fff" },
+  { id: "birthdays", summary: "Birthdays", backgroundColor: "#33b679", foregroundColor: "#fff" },
+];
+
+const MONTHS = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+const DOW = ["S", "M", "T", "W", "T", "F", "S"];
+
+const state = {
+  year: new Date().getFullYear(),
+  month: new Date().getMonth(),
+  miniYear: new Date().getFullYear(),
+  miniMonth: new Date().getMonth(),
+  events: [],
+  calendars: DEMO_CALENDARS.slice(),
+  hidden: new Set(JSON.parse(localStorage.getItem(STORAGE_HIDDEN) || "[]")),
+  token: null,
+  connected: false,
+  tokenClient: null,
+};
+
+function pad(n) {
+  return String(n).padStart(2, "0");
+}
+
+function dateKey(d) {
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function startOfDay(d) {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+function addDays(d, n) {
+  const x = new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+  return x;
+}
+
+function isSameDay(a, b) {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+function formatTime(d) {
+  let h = d.getHours();
+  const m = d.getMinutes();
+  const ampm = h >= 12 ? "pm" : "am";
+  h = h % 12 || 12;
+  return m === 0 ? `${h}${ampm}` : `${h}:${pad(m)}${ampm}`;
+}
+
+function formatRange(event) {
+  if (event.allDay) {
+    const last = addDays(event.end, -1);
+    if (isSameDay(event.start, last)) {
+      return event.start.toLocaleDateString(undefined, {
+        weekday: "long",
+        month: "long",
+        day: "numeric",
+      });
+    }
+    return `${event.start.toLocaleDateString(undefined, { month: "short", day: "numeric" })} – ${last.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
+  }
+  const same = isSameDay(event.start, event.end) || event.end - event.start < 24 * 3600 * 1000;
+  if (same) {
+    return `${event.start.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })} · ${formatTime(event.start)} – ${formatTime(event.end)}`;
+  }
+  return `${event.start.toLocaleString()} – ${event.end.toLocaleString()}`;
+}
+
+function textOn(bg) {
+  const hex = (bg || "#039be5").replace("#", "");
+  const full = hex.length === 3 ? hex.split("").map((c) => c + c).join("") : hex;
+  if (full.length < 6) return "#fff";
+  const r = parseInt(full.slice(0, 2), 16);
+  const g = parseInt(full.slice(2, 4), 16);
+  const b = parseInt(full.slice(4, 6), 16);
+  const y = (r * 299 + g * 587 + b * 114) / 1000;
+  return y >= 155 ? "#1f1f1f" : "#fff";
+}
+
+function getClientId() {
+  return (
+    localStorage.getItem(STORAGE_CLIENT) ||
+    window.WEEKEND_CALENDAR_CLIENT_ID ||
+    ""
+  ).trim();
+}
+
+function weekendsInMonth(year, month) {
+  const lastDate = new Date(year, month + 1, 0).getDate();
+  const seen = new Set();
+  const weekends = [];
+  for (let day = 1; day <= lastDate; day++) {
+    const d = new Date(year, month, day);
+    const dow = d.getDay();
+    if (dow !== 5 && dow !== 6 && dow !== 0) continue;
+    const friday = dow === 5 ? d : dow === 6 ? addDays(d, -1) : addDays(d, -2);
+    const key = dateKey(friday);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    weekends.push({
+      friday,
+      days: [friday, addDays(friday, 1), addDays(friday, 2)],
+    });
+  }
+  return weekends;
+}
+
+function eventOverlapsDay(event, day) {
+  const dayStart = startOfDay(day);
+  const dayEnd = addDays(dayStart, 1);
+  return event.start < dayEnd && event.end > dayStart;
+}
+
+function isBarEvent(event) {
+  if (event.allDay) return true;
+  const startDay = startOfDay(event.start);
+  const endExclusive = event.end.getHours() === 0 && event.end.getMinutes() === 0 && event.end.getSeconds() === 0
+    ? startOfDay(event.end)
+    : addDays(startOfDay(event.end), 1);
+  return endExclusive.getTime() > addDays(startDay, 1).getTime();
+}
+
+function visibleEvents() {
+  return state.events.filter((event) => !state.hidden.has(event.calendarId));
+}
+
+function layoutWeekend(days, events) {
+  const overlapping = events.filter((event) => days.some((day) => eventOverlapsDay(event, day)));
+  const bars = [];
+  const timedByDay = [[], [], []];
+
+  for (const event of overlapping) {
+    if (isBarEvent(event)) {
+      let startIdx = 0;
+      while (startIdx < 3 && !eventOverlapsDay(event, days[startIdx])) startIdx += 1;
+      let endIdx = 2;
+      while (endIdx >= 0 && !eventOverlapsDay(event, days[endIdx])) endIdx -= 1;
+      if (startIdx > endIdx) continue;
+      const weekendStart = startOfDay(days[0]);
+      const weekendEnd = addDays(days[2], 1);
+      bars.push({
+        event,
+        startIdx,
+        endIdx,
+        span: endIdx - startIdx + 1,
+        continuesLeft: event.start < weekendStart,
+        continuesRight: event.end > weekendEnd,
+      });
+    } else {
+      for (let i = 0; i < 3; i += 1) {
+        if (eventOverlapsDay(event, days[i])) timedByDay[i].push(event);
+      }
+    }
+  }
+
+  bars.sort(
+    (a, b) =>
+      a.startIdx - b.startIdx ||
+      b.span - a.span ||
+      a.event.start - b.event.start ||
+      a.event.title.localeCompare(b.event.title)
+  );
+  for (const list of timedByDay) {
+    list.sort((a, b) => a.start - b.start || a.title.localeCompare(b.title));
+  }
+
+  const lanes = [];
+  for (const bar of bars) {
+    let lane = 0;
+    for (; lane < lanes.length; lane += 1) {
+      const conflict = lanes[lane].some(
+        (other) => !(bar.endIdx < other.startIdx || bar.startIdx > other.endIdx)
+      );
+      if (!conflict) break;
+    }
+    bar.lane = lane;
+    if (!lanes[lane]) lanes[lane] = [];
+    lanes[lane].push(bar);
+  }
+
+  return { bars, timedByDay, laneCount: lanes.length };
+}
+
+function demoEvents(year, month) {
+  const weekends = weekendsInMonth(year, month);
+  const events = [];
+  let id = 0;
+
+  const push = (partial) => {
+    events.push({
+      id: `demo-${id++}`,
+      htmlLink: null,
+      ...partial,
+    });
+  };
+
+  weekends.forEach((weekend, index) => {
+    const [fri, sat, sun] = weekend.days;
+    const mon = addDays(sun, 1);
+
+    push({
+      calendarId: "work",
+      title: "Mavenlink Check",
+      start: new Date(fri.getFullYear(), fri.getMonth(), fri.getDate(), 8, 30),
+      end: new Date(fri.getFullYear(), fri.getMonth(), fri.getDate(), 9, 0),
+      allDay: false,
+      color: "#039be5",
+    });
+    push({
+      calendarId: "work",
+      title: "Internal standup",
+      start: new Date(fri.getFullYear(), fri.getMonth(), fri.getDate(), 9, 30),
+      end: new Date(fri.getFullYear(), fri.getMonth(), fri.getDate(), 10, 0),
+      allDay: false,
+      color: "#3f51b5",
+    });
+    push({
+      calendarId: "work",
+      title: "Daily Product Sync",
+      start: new Date(fri.getFullYear(), fri.getMonth(), fri.getDate(), 12, 0),
+      end: new Date(fri.getFullYear(), fri.getMonth(), fri.getDate(), 12, 25),
+      allDay: false,
+      color: "#039be5",
+    });
+    push({
+      calendarId: "work",
+      title: "1:1 with manager",
+      start: new Date(fri.getFullYear(), fri.getMonth(), fri.getDate(), 13, 0),
+      end: new Date(fri.getFullYear(), fri.getMonth(), fri.getDate(), 13, 30),
+      allDay: false,
+      color: "#3f51b5",
+    });
+    push({
+      calendarId: "work",
+      title: "Sprint review",
+      start: new Date(fri.getFullYear(), fri.getMonth(), fri.getDate(), 15, 0),
+      end: new Date(fri.getFullYear(), fri.getMonth(), fri.getDate(), 16, 0),
+      allDay: false,
+      color: "#039be5",
+    });
+
+    if (index === 0) {
+      push({
+        calendarId: "family",
+        title: "Molly Debate?",
+        start: startOfDay(fri),
+        end: startOfDay(sun),
+        allDay: true,
+        color: "#33b679",
+      });
+    }
+
+    if (index === 1) {
+      push({
+        calendarId: "personal",
+        title: "Weekend away",
+        start: startOfDay(fri),
+        end: startOfDay(mon),
+        allDay: true,
+        color: "#d50000",
+      });
+      push({
+        calendarId: "family",
+        title: "Dinner with parents",
+        start: new Date(sat.getFullYear(), sat.getMonth(), sat.getDate(), 18, 0),
+        end: new Date(sat.getFullYear(), sat.getMonth(), sat.getDate(), 20, 0),
+        allDay: false,
+        color: "#8e24aa",
+      });
+    }
+
+    if (index === 2) {
+      push({
+        calendarId: "family",
+        title: "Family visit",
+        start: startOfDay(sat),
+        end: startOfDay(mon),
+        allDay: true,
+        color: "#8e24aa",
+      });
+    }
+
+    if (index % 2 === 0) {
+      push({
+        calendarId: "personal",
+        title: "Farmers market",
+        start: new Date(sat.getFullYear(), sat.getMonth(), sat.getDate(), 10, 0),
+        end: new Date(sat.getFullYear(), sat.getMonth(), sat.getDate(), 11, 30),
+        allDay: false,
+        color: "#f4511e",
+      });
+    }
+
+    push({
+      calendarId: "family",
+      title: "Brunch",
+      start: new Date(sun.getFullYear(), sun.getMonth(), sun.getDate(), 11, 0),
+      end: new Date(sun.getFullYear(), sun.getMonth(), sun.getDate(), 12, 30),
+      allDay: false,
+      color: "#8e24aa",
+    });
+
+    if (index === weekends.length - 1) {
+      push({
+        calendarId: "birthdays",
+        title: "Sam's birthday",
+        start: startOfDay(sat),
+        end: addDays(sat, 1),
+        allDay: true,
+        color: "#33b679",
+      });
+    }
+  });
+
+  return events;
+}
+
+function calendarColor(calendarId, fallback) {
+  const cal = state.calendars.find((item) => item.id === calendarId);
+  return fallback || cal?.backgroundColor || "#039be5";
+}
+
+function renderMiniCal() {
+  const el = document.getElementById("mini-cal");
+  const { miniYear: year, miniMonth: month } = state;
+  const firstDow = new Date(year, month, 1).getDay();
+  const lastDate = new Date(year, month + 1, 0).getDate();
+  const today = new Date();
+  const weekends = new Set(
+    weekendsInMonth(state.year, state.month).flatMap((w) => w.days.map(dateKey))
+  );
+
+  let days = "";
+  for (let i = 0; i < firstDow; i += 1) {
+    const d = new Date(year, month, i - firstDow + 1);
+    days += `<button class="mini-day outside" data-date="${dateKey(d)}">${d.getDate()}</button>`;
+  }
+  for (let day = 1; day <= lastDate; day += 1) {
+    const d = new Date(year, month, day);
+    const key = dateKey(d);
+    const classes = ["mini-day"];
+    if (weekends.has(key)) classes.push("weekend");
+    if (isSameDay(d, today)) classes.push("today");
+    days += `<button class="${classes.join(" ")}" data-date="${key}">${day}</button>`;
+  }
+
+  el.innerHTML = `
+    <div class="mini-head">
+      <div class="mini-label">${MONTHS[month]} ${year}</div>
+      <button class="icon-btn" id="mini-prev" aria-label="Previous month in sidebar">
+        <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+      </button>
+      <button class="icon-btn" id="mini-next" aria-label="Next month in sidebar">
+        <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M10 6 8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
+      </button>
+    </div>
+    <div class="mini-dows">${DOW.map((d) => `<span>${d}</span>`).join("")}</div>
+    <div class="mini-grid">${days}</div>
+  `;
+
+  el.querySelector("#mini-prev").addEventListener("click", () => {
+    const d = new Date(year, month - 1, 1);
+    state.miniYear = d.getFullYear();
+    state.miniMonth = d.getMonth();
+    renderMiniCal();
+  });
+  el.querySelector("#mini-next").addEventListener("click", () => {
+    const d = new Date(year, month + 1, 1);
+    state.miniYear = d.getFullYear();
+    state.miniMonth = d.getMonth();
+    renderMiniCal();
+  });
+  el.querySelectorAll(".mini-day").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const [y, m] = btn.dataset.date.split("-").map(Number);
+      state.year = y;
+      state.month = m - 1;
+      state.miniYear = y;
+      state.miniMonth = m - 1;
+      onMonthChange();
+    });
+  });
+}
+
+function renderCalList() {
+  const el = document.getElementById("cal-list");
+  el.innerHTML = state.calendars
+    .map((cal) => {
+      const checked = !state.hidden.has(cal.id) ? "checked" : "";
+      return `<label class="cal-item" style="--cal-color:${cal.backgroundColor}">
+        <input type="checkbox" data-id="${cal.id}" ${checked} />
+        <span class="name">${escapeHtml(cal.summary)}</span>
+      </label>`;
+    })
+    .join("");
+  el.querySelectorAll("input").forEach((input) => {
+    input.addEventListener("change", () => {
+      if (input.checked) state.hidden.delete(input.dataset.id);
+      else state.hidden.add(input.dataset.id);
+      localStorage.setItem(STORAGE_HIDDEN, JSON.stringify([...state.hidden]));
+      renderGrid();
+    });
+  });
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+function hidePopover() {
+  document.getElementById("popover").classList.add("hidden");
+}
+
+function showPopover(html, anchor) {
+  const pop = document.getElementById("popover");
+  pop.innerHTML = `<button class="icon-btn popover-close" aria-label="Close">${closeSvg()}</button>${html}`;
+  pop.classList.remove("hidden");
+  pop.querySelector(".popover-close").addEventListener("click", hidePopover);
+
+  const rect = anchor.getBoundingClientRect();
+  const width = pop.offsetWidth;
+  const height = pop.offsetHeight;
+  let left = rect.left;
+  let top = rect.bottom + 6;
+  if (left + width > window.innerWidth - 12) left = window.innerWidth - width - 12;
+  if (top + height > window.innerHeight - 12) top = Math.max(12, rect.top - height - 6);
+  pop.style.left = `${Math.max(12, left)}px`;
+  pop.style.top = `${top}px`;
+}
+
+function closeSvg() {
+  return `<svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>`;
+}
+
+function eventDetailHtml(event) {
+  const cal = state.calendars.find((item) => item.id === event.calendarId);
+  const open = event.htmlLink
+    ? `<p><a href="${escapeHtml(event.htmlLink)}" target="_blank" rel="noopener">Open in Google Calendar</a></p>`
+    : "";
+  return `<h3>${escapeHtml(event.title)}</h3>
+    <p class="when">${escapeHtml(formatRange(event))}</p>
+    <p class="cal-name">${escapeHtml(cal?.summary || "Calendar")}</p>
+    ${open}`;
+}
+
+function showEvent(event, anchor) {
+  showPopover(eventDetailHtml(event), anchor);
+}
+
+function showDayMore(day, events, anchor) {
+  const label = day.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+  const rows = events
+    .map((event) => {
+      const time = event.allDay ? "All day" : formatTime(event.start);
+      return `<div class="event-row" data-id="${escapeHtml(event.id)}">
+        <span class="dot" style="background:${event.color}"></span>
+        <span class="time">${escapeHtml(time)}</span>
+        <span class="title">${escapeHtml(event.title)}</span>
+      </div>`;
+    })
+    .join("");
+  showPopover(`<h3>${escapeHtml(label)}</h3>${rows}`, anchor);
+  document.querySelectorAll("#popover .event-row").forEach((row) => {
+    row.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      const event = events.find((item) => item.id === row.dataset.id);
+      if (event) showEvent(event, row);
+    });
+  });
+}
+
+function renderGrid() {
+  const rowsEl = document.getElementById("weekend-rows");
+  rowsEl.querySelectorAll(".weekend-row").forEach((row) => row._ro?.disconnect());
+  const weekends = weekendsInMonth(state.year, state.month);
+  const events = visibleEvents();
+  const today = new Date();
+
+  document.getElementById("month-title").textContent = `${MONTHS[state.month]} ${state.year}`;
+
+  rowsEl.innerHTML = weekends
+    .map((weekend, rowIndex) => {
+      const cells = weekend.days
+        .map((day, dayIndex) => {
+          const outside = day.getMonth() !== state.month;
+          const todayClass = isSameDay(day, today) ? " today" : "";
+          return `<div class="day-cell${outside ? " outside" : ""}${todayClass}" data-row="${rowIndex}" data-day="${dayIndex}">
+            <div class="date-num"><span>${day.getDate()}</span></div>
+            <div class="timed-list"></div>
+          </div>`;
+        })
+        .join("");
+      return `<div class="weekend-row" data-row="${rowIndex}">
+        <div class="days-wrap">
+          ${cells}
+          <div class="bars-layer"></div>
+        </div>
+        <div class="gap-cell"></div>
+      </div>`;
+    })
+    .join("");
+
+  weekends.forEach((weekend, rowIndex) => {
+    paintRow(rowsEl.querySelector(`[data-row="${rowIndex}"]`), weekend, events);
+  });
+}
+
+function paintRow(rowEl, weekend, events) {
+  const wrap = rowEl.querySelector(".days-wrap");
+  const layer = rowEl.querySelector(".bars-layer");
+  const lists = [...rowEl.querySelectorAll(".timed-list")];
+  const layout = layoutWeekend(weekend.days, events);
+
+  const paint = () => {
+    const header = 28;
+    const slot = 22;
+    const maxSlots = Math.max(1, Math.floor((wrap.clientHeight - header - 2) / slot));
+    const overflow = hasOverflow(layout, maxSlots);
+    const visibleSlots = overflow ? maxSlots - 1 : maxSlots;
+    const visibleLanes = Math.min(layout.laneCount, visibleSlots);
+
+    layer.innerHTML = "";
+    for (const bar of layout.bars) {
+      if (bar.lane >= visibleLanes) continue;
+      const el = document.createElement("div");
+      el.className = "bar";
+      if (bar.continuesLeft) el.classList.add("continues-left");
+      if (bar.continuesRight) el.classList.add("continues-right");
+      el.textContent = bar.event.title;
+      el.title = bar.event.title;
+      el.style.background = bar.event.color;
+      el.style.color = textOn(bar.event.color);
+      el.style.left = `calc(${(bar.startIdx / 3) * 100}% + ${bar.continuesLeft ? 0 : 4}px)`;
+      el.style.width = `calc(${(bar.span / 3) * 100}% - ${
+        (bar.continuesLeft ? 0 : 4) + (bar.continuesRight ? 0 : 4)
+      }px)`;
+      el.style.top = `${bar.lane * slot}px`;
+      el.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        showEvent(bar.event, el);
+      });
+      layer.appendChild(el);
+    }
+
+    layout.timedByDay.forEach((list, dayIndex) => {
+      const hiddenBars = layout.bars.filter(
+        (bar) => bar.lane >= visibleLanes && dayIndex >= bar.startIdx && dayIndex <= bar.endIdx
+      ).length;
+      const timedRoom = Math.max(0, visibleSlots - visibleLanes);
+      const needsMore = hiddenBars + list.length > timedRoom;
+      const shownTimed = needsMore ? Math.max(0, timedRoom - 1) : list.length;
+      const hiddenTimed = list.length - shownTimed;
+      const moreCount = hiddenBars + hiddenTimed;
+
+      lists[dayIndex].style.paddingTop = `${visibleLanes * slot}px`;
+      lists[dayIndex].innerHTML = "";
+      list.slice(0, shownTimed).forEach((event) => {
+        const el = document.createElement("div");
+        el.className = "timed";
+        el.innerHTML = `<span class="dot" style="background:${event.color}"></span>
+          <span class="time">${escapeHtml(formatTime(event.start))}</span>
+          <span class="title">${escapeHtml(event.title)}</span>`;
+        el.title = `${formatTime(event.start)} ${event.title}`;
+        el.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          showEvent(event, el);
+        });
+        lists[dayIndex].appendChild(el);
+      });
+      if (moreCount > 0) {
+        const more = document.createElement("div");
+        more.className = "more-link";
+        more.textContent = `${moreCount} more`;
+        more.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          const dayEvents = [
+            ...layout.bars
+              .filter((bar) => dayIndex >= bar.startIdx && dayIndex <= bar.endIdx)
+              .map((bar) => bar.event),
+            ...list,
+          ];
+          showDayMore(weekend.days[dayIndex], dayEvents, more);
+        });
+        lists[dayIndex].appendChild(more);
+      }
+    });
+  };
+
+  paint();
+  if (rowEl._ro) rowEl._ro.disconnect();
+  rowEl._ro = new ResizeObserver(() => paint());
+  rowEl._ro.observe(wrap);
+}
+
+function hasOverflow(layout, maxSlots) {
+  if (layout.laneCount > maxSlots) return true;
+  return layout.timedByDay.some((list) => layout.laneCount + list.length > maxSlots);
+}
+
+function goTo(year, month) {
+  const d = new Date(year, month, 1);
+  state.year = d.getFullYear();
+  state.month = d.getMonth();
+  state.miniYear = state.year;
+  state.miniMonth = state.month;
+  onMonthChange();
+}
+
+function onMonthChange() {
+  if (!state.connected) {
+    state.events = demoEvents(state.year, state.month);
+    renderAll();
+    return;
+  }
+  loadGoogleEvents().catch((err) => {
+    console.error(err);
+    state.events = demoEvents(state.year, state.month);
+    renderAll();
+  });
+}
+
+function renderAll() {
+  document.getElementById("demo-banner").classList.toggle("hidden", state.connected);
+  document.getElementById("connect-btn").textContent = state.connected
+    ? "Connected"
+    : "Connect Google Calendar";
+  renderMiniCal();
+  renderCalList();
+  renderGrid();
+}
+
+function waitForGis() {
+  return new Promise((resolve, reject) => {
+    if (window.google?.accounts?.oauth2) {
+      resolve();
+      return;
+    }
+    const started = Date.now();
+    const timer = setInterval(() => {
+      if (window.google?.accounts?.oauth2) {
+        clearInterval(timer);
+        resolve();
+      } else if (Date.now() - started > 8000) {
+        clearInterval(timer);
+        reject(new Error("Google Identity Services did not load"));
+      }
+    }, 50);
+  });
+}
+
+async function apiGet(url) {
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${state.token}` },
+  });
+  if (res.status === 401) {
+    await requestToken(true);
+    const retry = await fetch(url, {
+      headers: { Authorization: `Bearer ${state.token}` },
+    });
+    if (!retry.ok) throw new Error(`Calendar API ${retry.status}`);
+    return retry.json();
+  }
+  if (!res.ok) throw new Error(`Calendar API ${res.status}`);
+  return res.json();
+}
+
+async function apiGetAll(url) {
+  const items = [];
+  let pageUrl = url;
+  for (;;) {
+    const data = await apiGet(pageUrl);
+    items.push(...(data.items || []));
+    if (!data.nextPageToken) return items;
+    const joiner = pageUrl.includes("?") ? "&" : "?";
+    pageUrl = `${url}${joiner}pageToken=${encodeURIComponent(data.nextPageToken)}`;
+  }
+}
+
+function toIso(d) {
+  return d.toISOString();
+}
+
+function parseEvent(item, calendar) {
+  const color = item.colorId ? colorFromId(item.colorId, calendar) : calendar.backgroundColor;
+  if (item.start?.date) {
+    const [y, m, d] = item.start.date.split("-").map(Number);
+    const [ey, em, ed] = (item.end?.date || item.start.date).split("-").map(Number);
+    return {
+      id: `${calendar.id}:${item.id}:${item.start.date}`,
+      calendarId: calendar.id,
+      title: item.summary || "(No title)",
+      start: new Date(y, m - 1, d),
+      end: new Date(ey, em - 1, ed),
+      allDay: true,
+      color,
+      htmlLink: item.htmlLink || null,
+    };
+  }
+  return {
+    id: `${calendar.id}:${item.id}:${item.start?.dateTime}`,
+    calendarId: calendar.id,
+    title: item.summary || "(No title)",
+    start: new Date(item.start.dateTime),
+    end: new Date(item.end?.dateTime || item.start.dateTime),
+    allDay: false,
+    color,
+    htmlLink: item.htmlLink || null,
+  };
+}
+
+const EVENT_COLORS = {
+  1: "#a4bdfc",
+  2: "#7ae7bf",
+  3: "#dbadff",
+  4: "#ff887c",
+  5: "#fbd75b",
+  6: "#ffb878",
+  7: "#46d6db",
+  8: "#e1e1e1",
+  9: "#5484ed",
+  10: "#51b749",
+  11: "#dc2127",
+};
+
+function colorFromId(colorId, calendar) {
+  return EVENT_COLORS[colorId] || calendar.backgroundColor;
+}
+
+async function loadGoogleEvents() {
+  const weekends = weekendsInMonth(state.year, state.month);
+  const timeMin = addDays(weekends[0].days[0], -1);
+  const timeMax = addDays(weekends[weekends.length - 1].days[2], 2);
+  const groups = await Promise.all(
+    state.calendars.map(async (cal) => {
+      const params = new URLSearchParams({
+        timeMin: toIso(timeMin),
+        timeMax: toIso(timeMax),
+        singleEvents: "true",
+        orderBy: "startTime",
+        maxResults: "2500",
+      });
+      const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
+        cal.id
+      )}/events?${params}`;
+      const items = await apiGetAll(url);
+      return items
+        .filter((item) => item.status !== "cancelled")
+        .map((item) => parseEvent(item, cal));
+    })
+  );
+  state.events = groups.flat();
+  renderAll();
+}
+
+async function loadCalendars() {
+  const items = await apiGetAll("https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=250");
+  state.calendars = items
+    .filter((item) => item.selected !== false)
+    .map((item) => ({
+      id: item.id,
+      summary: item.summaryOverride || item.summary,
+      backgroundColor: item.backgroundColor || "#039be5",
+      foregroundColor: item.foregroundColor || "#fff",
+    }));
+}
+
+function requestToken(silent) {
+  return new Promise((resolve, reject) => {
+    if (!state.tokenClient) {
+      reject(new Error("Sign-in is not ready"));
+      return;
+    }
+    state.tokenClient.callback = (resp) => {
+      if (resp.error) {
+        reject(new Error(resp.error));
+        return;
+      }
+      state.token = resp.access_token;
+      state.connected = true;
+      resolve(resp);
+    };
+    state.tokenClient.requestAccessToken({ prompt: silent ? "" : "consent" });
+  });
+}
+
+async function connect() {
+  const clientId = getClientId();
+  if (!clientId) {
+    openSettings();
+    return;
+  }
+  await waitForGis();
+  state.tokenClient = window.google.accounts.oauth2.initTokenClient({
+    client_id: clientId,
+    scope: "https://www.googleapis.com/auth/calendar.readonly",
+    callback: () => {},
+  });
+  await requestToken(false);
+  await loadCalendars();
+  await loadGoogleEvents();
+}
+
+function signOut() {
+  const clientId = getClientId();
+  if (state.token && window.google?.accounts?.oauth2) {
+    window.google.accounts.oauth2.revoke(state.token, () => {});
+  }
+  state.token = null;
+  state.connected = false;
+  state.tokenClient = null;
+  state.calendars = DEMO_CALENDARS.slice();
+  state.hidden = new Set();
+  void clientId;
+  onMonthChange();
+}
+
+function openSettings() {
+  document.getElementById("origin-preview").textContent = window.location.origin;
+  document.getElementById("client-id-input").value = getClientId();
+  document.getElementById("modal-backdrop").classList.remove("hidden");
+  document.getElementById("settings-modal").classList.remove("hidden");
+}
+
+function closeSettings() {
+  document.getElementById("modal-backdrop").classList.add("hidden");
+  document.getElementById("settings-modal").classList.add("hidden");
+}
+
+function bind() {
+  document.getElementById("today-btn").addEventListener("click", () => {
+    const now = new Date();
+    goTo(now.getFullYear(), now.getMonth());
+  });
+  document.getElementById("prev-btn").addEventListener("click", () => goTo(state.year, state.month - 1));
+  document.getElementById("next-btn").addEventListener("click", () => goTo(state.year, state.month + 1));
+  document.getElementById("connect-btn").addEventListener("click", () => {
+    if (state.connected) openSettings();
+    else if (getClientId()) connect().catch((err) => {
+      console.error(err);
+      openSettings();
+    });
+    else openSettings();
+  });
+  document.getElementById("settings-btn").addEventListener("click", openSettings);
+  document.getElementById("close-settings-btn").addEventListener("click", closeSettings);
+  document.getElementById("modal-backdrop").addEventListener("click", closeSettings);
+  document.getElementById("save-connect-btn").addEventListener("click", async () => {
+    const value = document.getElementById("client-id-input").value.trim();
+    if (value) localStorage.setItem(STORAGE_CLIENT, value);
+    closeSettings();
+    try {
+      await connect();
+    } catch (err) {
+      console.error(err);
+      alert(err.message || "Could not connect to Google Calendar.");
+    }
+  });
+  document.getElementById("signout-btn").addEventListener("click", () => {
+    signOut();
+    closeSettings();
+  });
+  document.getElementById("sidebar-toggle").addEventListener("click", () => {
+    const sidebar = document.getElementById("sidebar");
+    if (window.matchMedia("(max-width: 900px)").matches) {
+      sidebar.classList.toggle("open");
+    } else {
+      sidebar.classList.toggle("collapsed");
+    }
+  });
+  document.addEventListener("click", (ev) => {
+    const pop = document.getElementById("popover");
+    if (!pop.classList.contains("hidden") && !pop.contains(ev.target)) hidePopover();
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") {
+      hidePopover();
+      closeSettings();
+    }
+    if (ev.target.matches("input, textarea")) return;
+    if (ev.key === "ArrowLeft") goTo(state.year, state.month - 1);
+    if (ev.key === "ArrowRight") goTo(state.year, state.month + 1);
+  });
+  window.addEventListener("resize", () => renderGrid());
+}
+
+bind();
+state.events = demoEvents(state.year, state.month);
+renderAll();
