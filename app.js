@@ -24,6 +24,7 @@ const MONTHS = [
 ];
 
 const DOW = ["S", "M", "T", "W", "T", "F", "S"];
+const WEEKENDS_SHOWN = 10;
 
 const state = {
   year: new Date().getFullYear(),
@@ -105,24 +106,40 @@ function getClientId() {
   ).trim();
 }
 
-function weekendsInMonth(year, month) {
-  const lastDate = new Date(year, month + 1, 0).getDate();
-  const seen = new Set();
+function fridayOnOrBefore(d) {
+  const day = startOfDay(d);
+  const dow = day.getDay();
+  if (dow === 5) return day;
+  if (dow === 6) return addDays(day, -1);
+  if (dow === 0) return addDays(day, -2);
+  return addDays(day, -(dow + 2));
+}
+
+function weekendsInView(year, month) {
+  const first = startOfDay(new Date(year, month, 1));
+  let friday = fridayOnOrBefore(first);
+  if (addDays(friday, 2) < first) friday = addDays(friday, 7);
   const weekends = [];
-  for (let day = 1; day <= lastDate; day++) {
-    const d = new Date(year, month, day);
-    const dow = d.getDay();
-    if (dow !== 5 && dow !== 6 && dow !== 0) continue;
-    const friday = dow === 5 ? d : dow === 6 ? addDays(d, -1) : addDays(d, -2);
-    const key = dateKey(friday);
-    if (seen.has(key)) continue;
-    seen.add(key);
+  for (let i = 0; i < WEEKENDS_SHOWN; i += 1) {
+    const start = addDays(friday, i * 7);
     weekends.push({
-      friday,
-      days: [friday, addDays(friday, 1), addDays(friday, 2)],
+      friday: start,
+      days: [start, addDays(start, 1), addDays(start, 2)],
     });
   }
   return weekends;
+}
+
+function viewTitle(weekends) {
+  const start = weekends[0].days[0];
+  const end = weekends[weekends.length - 1].days[2];
+  if (start.getMonth() === end.getMonth() && start.getFullYear() === end.getFullYear()) {
+    return `${MONTHS[start.getMonth()]} ${start.getFullYear()}`;
+  }
+  if (start.getFullYear() === end.getFullYear()) {
+    return `${MONTHS[start.getMonth()]} – ${MONTHS[end.getMonth()]} ${end.getFullYear()}`;
+  }
+  return `${MONTHS[start.getMonth()]} ${start.getFullYear()} – ${MONTHS[end.getMonth()]} ${end.getFullYear()}`;
 }
 
 function eventOverlapsDay(event, day) {
@@ -202,7 +219,7 @@ function layoutWeekend(days, events) {
 }
 
 function demoEvents(year, month) {
-  const weekends = weekendsInMonth(year, month);
+  const weekends = weekendsInView(year, month);
   const events = [];
   let id = 0;
 
@@ -347,7 +364,7 @@ function renderMiniCal() {
   const lastDate = new Date(year, month + 1, 0).getDate();
   const today = new Date();
   const weekends = new Set(
-    weekendsInMonth(state.year, state.month).flatMap((w) => w.days.map(dateKey))
+    weekendsInView(state.year, state.month).flatMap((w) => w.days.map(dateKey))
   );
 
   let days = "";
@@ -493,46 +510,59 @@ function showDayMore(day, events, anchor) {
   });
 }
 
+function dateLabel(day) {
+  const isFriday = day.getDay() === 5;
+  const isMonthStart = day.getDate() === 1;
+  if (isFriday || isMonthStart) {
+    return day.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  }
+  return String(day.getDate());
+}
+
+function dayCellHtml(day, today) {
+  const outside = day.getMonth() !== state.month;
+  const todayClass = isSameDay(day, today) ? " today" : "";
+  return `<div class="day-cell${outside ? " outside" : ""}${todayClass}">
+    <div class="date-num"><span>${dateLabel(day)}</span></div>
+    <div class="timed-list"></div>
+  </div>`;
+}
+
+function weekendGroupHtml(weekend, today) {
+  return `${weekend.days.map((day) => dayCellHtml(day, today)).join("")}
+    <div class="bars-layer"></div>`;
+}
+
 function renderGrid() {
   const rowsEl = document.getElementById("weekend-rows");
-  rowsEl.querySelectorAll(".weekend-row").forEach((row) => row._ro?.disconnect());
-  const weekends = weekendsInMonth(state.year, state.month);
+  rowsEl.querySelectorAll(".days-wrap").forEach((wrap) => wrap._ro?.disconnect());
+  const weekends = weekendsInView(state.year, state.month);
   const events = visibleEvents();
   const today = new Date();
+  const rowCount = WEEKENDS_SHOWN / 2;
 
-  document.getElementById("month-title").textContent = `${MONTHS[state.month]} ${state.year}`;
+  document.getElementById("month-title").textContent = viewTitle(weekends);
 
-  rowsEl.innerHTML = weekends
-    .map((weekend, rowIndex) => {
-      const cells = weekend.days
-        .map((day, dayIndex) => {
-          const outside = day.getMonth() !== state.month;
-          const todayClass = isSameDay(day, today) ? " today" : "";
-          return `<div class="day-cell${outside ? " outside" : ""}${todayClass}" data-row="${rowIndex}" data-day="${dayIndex}">
-            <div class="date-num"><span>${day.getDate()}</span></div>
-            <div class="timed-list"></div>
-          </div>`;
-        })
-        .join("");
-      return `<div class="weekend-row" data-row="${rowIndex}">
-        <div class="days-wrap">
-          ${cells}
-          <div class="bars-layer"></div>
-        </div>
-        <div class="gap-cell"></div>
-      </div>`;
-    })
-    .join("");
+  rowsEl.innerHTML = Array.from({ length: rowCount }, (_, rowIndex) => {
+    const left = weekends[rowIndex];
+    const right = weekends[rowIndex + rowCount];
+    return `<div class="weekend-row">
+      <div class="days-wrap">${weekendGroupHtml(left, today)}</div>
+      <div class="gap-cell"></div>
+      <div class="days-wrap">${weekendGroupHtml(right, today)}</div>
+    </div>`;
+  }).join("");
 
-  weekends.forEach((weekend, rowIndex) => {
-    paintRow(rowsEl.querySelector(`[data-row="${rowIndex}"]`), weekend, events);
+  rowsEl.querySelectorAll(".weekend-row").forEach((rowEl, rowIndex) => {
+    const wraps = rowEl.querySelectorAll(".days-wrap");
+    paintWeekend(wraps[0], weekends[rowIndex], events);
+    paintWeekend(wraps[1], weekends[rowIndex + rowCount], events);
   });
 }
 
-function paintRow(rowEl, weekend, events) {
-  const wrap = rowEl.querySelector(".days-wrap");
-  const layer = rowEl.querySelector(".bars-layer");
-  const lists = [...rowEl.querySelectorAll(".timed-list")];
+function paintWeekend(wrap, weekend, events) {
+  const layer = wrap.querySelector(".bars-layer");
+  const lists = [...wrap.querySelectorAll(".timed-list")];
   const layout = layoutWeekend(weekend.days, events);
 
   const paint = () => {
@@ -611,9 +641,9 @@ function paintRow(rowEl, weekend, events) {
   };
 
   paint();
-  if (rowEl._ro) rowEl._ro.disconnect();
-  rowEl._ro = new ResizeObserver(() => paint());
-  rowEl._ro.observe(wrap);
+  if (wrap._ro) wrap._ro.disconnect();
+  wrap._ro = new ResizeObserver(() => paint());
+  wrap._ro.observe(wrap);
 }
 
 function hasOverflow(layout, maxSlots) {
@@ -751,7 +781,7 @@ function colorFromId(colorId, calendar) {
 }
 
 async function loadGoogleEvents() {
-  const weekends = weekendsInMonth(state.year, state.month);
+  const weekends = weekendsInView(state.year, state.month);
   const timeMin = addDays(weekends[0].days[0], -1);
   const timeMax = addDays(weekends[weekends.length - 1].days[2], 2);
   const groups = await Promise.all(
