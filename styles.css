@@ -183,6 +183,15 @@ a {
   user-select: none;
 }
 
+.mini-month + .mini-month {
+  margin-top: 16px;
+}
+
+.mini-nav-spacer {
+  width: 64px;
+  flex: 0 0 64px;
+}
+
 .mini-head {
   display: flex;
   align-items: center;
@@ -216,10 +225,10 @@ a {
 }
 
 .mini-day {
-  height: 28px;
+  height: 26px;
   border: 0;
   background: transparent;
-  border-radius: 50%;
+  border-radius: 4px;
   font-size: 10px;
   color: var(--text);
   cursor: pointer;
@@ -229,18 +238,23 @@ a {
   color: #bdc1c6;
 }
 
-.mini-day.weekend {
-  font-weight: 500;
+.mini-day.in-range {
+  background: #e8f0fe;
+}
+
+.mini-day.in-range.outside {
+  background: #f0f4fc;
 }
 
 .mini-day.today {
   background: var(--today);
   color: #fff;
   font-weight: 500;
+  border-radius: 50%;
 }
 
 .mini-day:hover:not(.today) {
-  background: var(--hover);
+  background: #d2e3fc;
 }
 
 .cal-list-section {

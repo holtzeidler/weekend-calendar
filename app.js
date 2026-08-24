@@ -358,43 +358,60 @@ function calendarColor(calendarId, fallback) {
   return fallback || cal?.backgroundColor || "#039be5";
 }
 
-function renderMiniCal() {
-  const el = document.getElementById("mini-cal");
-  const { miniYear: year, miniMonth: month } = state;
+function viewRange() {
+  const weekends = weekendsInView();
+  return {
+    startKey: dateKey(weekends[0].days[0]),
+    endKey: dateKey(weekends[weekends.length - 1].days[2]),
+  };
+}
+
+function miniMonthHtml(year, month, range, today, showNav) {
   const firstDow = new Date(year, month, 1).getDay();
   const lastDate = new Date(year, month + 1, 0).getDate();
-  const today = new Date();
-  const weekends = new Set(
-    weekendsInView().flatMap((w) => w.days.map(dateKey))
-  );
-
+  const cellCount = Math.ceil((firstDow + lastDate) / 7) * 7;
   let days = "";
-  for (let i = 0; i < firstDow; i += 1) {
+  for (let i = 0; i < cellCount; i += 1) {
     const d = new Date(year, month, i - firstDow + 1);
-    days += `<button class="mini-day outside" data-date="${dateKey(d)}">${d.getDate()}</button>`;
-  }
-  for (let day = 1; day <= lastDate; day += 1) {
-    const d = new Date(year, month, day);
     const key = dateKey(d);
     const classes = ["mini-day"];
-    if (weekends.has(key)) classes.push("weekend");
+    if (d.getMonth() !== month) classes.push("outside");
+    if (key >= range.startKey && key <= range.endKey) classes.push("in-range");
     if (isSameDay(d, today)) classes.push("today");
-    days += `<button class="${classes.join(" ")}" data-date="${key}">${day}</button>`;
+    days += `<button class="${classes.join(" ")}" data-date="${key}">${d.getDate()}</button>`;
   }
 
-  el.innerHTML = `
-    <div class="mini-head">
-      <div class="mini-label">${MONTHS[month]} ${year}</div>
-      <button class="icon-btn" id="mini-prev" aria-label="Previous month in sidebar">
+  const nav = showNav
+    ? `<button class="icon-btn" id="mini-prev" aria-label="Previous month in sidebar">
         <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
       </button>
       <button class="icon-btn" id="mini-next" aria-label="Next month in sidebar">
         <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M10 6 8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
-      </button>
+      </button>`
+    : `<span class="mini-nav-spacer"></span>`;
+
+  return `<div class="mini-month">
+    <div class="mini-head">
+      <div class="mini-label">${MONTHS[month]} ${year}</div>
+      ${nav}
     </div>
     <div class="mini-dows">${DOW.map((d) => `<span>${d}</span>`).join("")}</div>
     <div class="mini-grid">${days}</div>
-  `;
+  </div>`;
+}
+
+function renderMiniCal() {
+  const el = document.getElementById("mini-cal");
+  const { miniYear: year, miniMonth: month } = state;
+  const today = new Date();
+  const range = viewRange();
+
+  el.innerHTML = [0, 1, 2]
+    .map((offset) => {
+      const d = new Date(year, month + offset, 1);
+      return miniMonthHtml(d.getFullYear(), d.getMonth(), range, today, offset === 0);
+    })
+    .join("");
 
   el.querySelector("#mini-prev").addEventListener("click", () => {
     const d = new Date(year, month - 1, 1);
