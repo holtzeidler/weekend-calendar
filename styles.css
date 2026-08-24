@@ -239,11 +239,11 @@ a {
 }
 
 .mini-day.in-range {
-  background: #e8f0fe;
+  background: #e3eefa;
 }
 
 .mini-day.in-range.outside {
-  background: #f0f4fc;
+  background: #eef3fb;
 }
 
 .mini-day.today {
