@@ -538,9 +538,10 @@ function dateLabel(day) {
 }
 
 function dayCellHtml(day, today) {
-  const outside = day.getMonth() !== state.startFriday.getMonth();
+  const isSaturday = day.getDay() === 6;
+  const outside = !isSaturday && day.getMonth() !== state.startFriday.getMonth();
   const todayClass = isSameDay(day, today) ? " today" : "";
-  const satClass = day.getDay() === 6 ? " saturday" : "";
+  const satClass = isSaturday ? " saturday" : "";
   return `<div class="day-cell${outside ? " outside" : ""}${todayClass}${satClass}">
     <div class="date-num"><span>${dateLabel(day)}</span></div>
     <div class="timed-list"></div>

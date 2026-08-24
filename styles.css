@@ -419,6 +419,10 @@ a {
   color: #bdc1c6;
 }
 
+.day-cell.outside.saturday .date-num {
+  color: var(--text);
+}
+
 .date-num {
   height: var(--date-h);
   display: flex;
@@ -445,6 +449,7 @@ a {
   font-weight: 500;
 }
 
+.day-cell.saturday .date-num,
 .day-cell.saturday .date-num span {
   font-weight: 700;
 }
