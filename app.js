@@ -537,28 +537,31 @@ function dateLabel(day) {
   return String(day.getDate());
 }
 
-function dayCellHtml(day, today) {
+function dayCellHtml(day, today, monthBreak) {
   const isSaturday = day.getDay() === 6;
   const outside = !isSaturday && day.getMonth() !== state.startFriday.getMonth();
   const todayClass = isSameDay(day, today) ? " today" : "";
   const satClass = isSaturday ? " saturday" : "";
-  return `<div class="day-cell${outside ? " outside" : ""}${todayClass}${satClass}">
+  const breakClass = monthBreak ? " month-break" : "";
+  return `<div class="day-cell${outside ? " outside" : ""}${todayClass}${satClass}${breakClass}">
     <div class="date-num"><span>${dateLabel(day)}</span></div>
     <div class="timed-list"></div>
   </div>`;
 }
 
-function weekendGroupHtml(weekend, today) {
-  return `${weekend.days.map((day) => dayCellHtml(day, today)).join("")}
+function weekendGroupHtml(weekend, today, previousWeekend) {
+  return `${weekend.days
+    .map((day, index) => {
+      const previousDay = previousWeekend?.days[index];
+      const monthBreak = Boolean(
+        previousDay &&
+          (day.getMonth() !== previousDay.getMonth() ||
+            day.getFullYear() !== previousDay.getFullYear())
+      );
+      return dayCellHtml(day, today, monthBreak);
+    })
+    .join("")}
     <div class="bars-layer"></div>`;
-}
-
-function startsNewMonth(weekend, previous) {
-  if (!previous) return false;
-  return (
-    weekend.friday.getMonth() !== previous.friday.getMonth() ||
-    weekend.friday.getFullYear() !== previous.friday.getFullYear()
-  );
 }
 
 function renderGrid() {
@@ -574,12 +577,12 @@ function renderGrid() {
   rowsEl.innerHTML = Array.from({ length: rowCount }, (_, rowIndex) => {
     const left = weekends[rowIndex];
     const right = weekends[rowIndex + rowCount];
-    const leftBreak = startsNewMonth(left, rowIndex > 0 ? weekends[rowIndex - 1] : null);
-    const rightBreak = startsNewMonth(right, rowIndex > 0 ? weekends[rowIndex + rowCount - 1] : null);
+    const previousLeft = rowIndex > 0 ? weekends[rowIndex - 1] : null;
+    const previousRight = weekends[rowIndex + rowCount - 1];
     return `<div class="weekend-row">
-      <div class="days-wrap${leftBreak ? " month-break" : ""}">${weekendGroupHtml(left, today)}</div>
+      <div class="days-wrap">${weekendGroupHtml(left, today, previousLeft)}</div>
       <div class="gap-cell"></div>
-      <div class="days-wrap${rightBreak ? " month-break" : ""}">${weekendGroupHtml(right, today)}</div>
+      <div class="days-wrap">${weekendGroupHtml(right, today, previousRight)}</div>
     </div>`;
   }).join("");
 
