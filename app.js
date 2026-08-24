@@ -1,5 +1,8 @@
 const STORAGE_CLIENT = "weekend-calendar.clientId";
 const STORAGE_HIDDEN = "weekend-calendar.hiddenCalendars";
+const STORAGE_TOKEN = "weekend-calendar.token";
+const STORAGE_SESSION = "weekend-calendar.session";
+const CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
 
 const DEMO_CALENDARS = [
   { id: "work", summary: "Work", backgroundColor: "#039be5", foregroundColor: "#fff" },
@@ -43,6 +46,7 @@ const state = {
   calendars: DEMO_CALENDARS.slice(),
   hidden: new Set(JSON.parse(localStorage.getItem(STORAGE_HIDDEN) || "[]")),
   token: null,
+  tokenExpiresAt: 0,
   connected: false,
   tokenClient: null,
 };
@@ -692,18 +696,28 @@ function onViewChange() {
     renderAll();
     return;
   }
-  loadGoogleEvents().catch((err) => {
-    console.error(err);
-    state.events = demoEvents(state.startFriday);
-    renderAll();
-  });
+  ensureFreshToken()
+    .then(() => loadGoogleEvents())
+    .catch((err) => {
+      console.error(err);
+      state.events = demoEvents(state.startFriday);
+      renderAll();
+    });
+}
+
+function wantsSession() {
+  return localStorage.getItem(STORAGE_SESSION) === "1";
+}
+
+function connectButtonLabel() {
+  if (state.connected) return "Connected";
+  if (wantsSession()) return "Reconnect";
+  return "Connect Google Calendar";
 }
 
 function renderAll() {
   document.getElementById("demo-banner").classList.toggle("hidden", state.connected);
-  document.getElementById("connect-btn").textContent = state.connected
-    ? "Connected"
-    : "Connect Google Calendar";
+  document.getElementById("connect-btn").textContent = connectButtonLabel();
   renderMiniCal();
   renderCalList();
   renderGrid();
@@ -733,7 +747,7 @@ async function apiGet(url) {
     headers: { Authorization: `Bearer ${state.token}` },
   });
   if (res.status === 401) {
-    await requestToken(true);
+    await requestToken({ prompt: "" });
     const retry = await fetch(url, {
       headers: { Authorization: `Bearer ${state.token}` },
     });
@@ -844,23 +858,181 @@ async function loadCalendars() {
     }));
 }
 
-function requestToken(silent) {
-  return new Promise((resolve, reject) => {
+function readSavedToken() {
+  try {
+    const data = JSON.parse(localStorage.getItem(STORAGE_TOKEN) || "null");
+    if (!data?.access_token || !data.expires_at) return null;
+    if (Date.now() >= data.expires_at) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function saveToken(resp) {
+  const expiresIn = Number(resp.expires_in) || 3600;
+  const expiresAt = Date.now() + Math.max(60, expiresIn - 60) * 1000;
+  state.token = resp.access_token;
+  state.tokenExpiresAt = expiresAt;
+  state.connected = true;
+  localStorage.setItem(STORAGE_SESSION, "1");
+  localStorage.setItem(
+    STORAGE_TOKEN,
+    JSON.stringify({ access_token: resp.access_token, expires_at: expiresAt })
+  );
+  disarmGestureReconnect();
+}
+
+function clearSavedToken() {
+  localStorage.removeItem(STORAGE_TOKEN);
+  state.token = null;
+  state.tokenExpiresAt = 0;
+}
+
+function applySavedToken(saved) {
+  state.token = saved.access_token;
+  state.tokenExpiresAt = saved.expires_at;
+  state.connected = true;
+  state.calendars = [];
+  state.events = [];
+}
+
+function tokenIsFresh() {
+  return Boolean(state.token) && Date.now() < state.tokenExpiresAt - 60 * 1000;
+}
+
+async function ensureTokenClient() {
+  const clientId = getClientId();
+  if (!clientId) throw new Error("Missing OAuth client ID");
+  await waitForGis();
+  if (state.tokenClient) return state.tokenClient;
+  state.tokenClient = window.google.accounts.oauth2.initTokenClient({
+    client_id: clientId,
+    scope: CALENDAR_SCOPE,
+    prompt: "",
+    callback: () => {},
+    error_callback: () => {},
+  });
+  return state.tokenClient;
+}
+
+let tokenRequest = null;
+let gestureReconnect = null;
+
+function requestToken({ prompt } = {}) {
+  if (tokenRequest) return tokenRequest;
+  tokenRequest = new Promise((resolve, reject) => {
     if (!state.tokenClient) {
       reject(new Error("Sign-in is not ready"));
       return;
     }
-    state.tokenClient.callback = (resp) => {
+    let settled = false;
+    let timer = 0;
+    const finish = (fn) => (arg) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn(arg);
+    };
+    state.tokenClient.callback = finish((resp) => {
       if (resp.error) {
         reject(new Error(resp.error));
         return;
       }
-      state.token = resp.access_token;
-      state.connected = true;
+      saveToken(resp);
       resolve(resp);
-    };
-    state.tokenClient.requestAccessToken({ prompt: silent ? "" : "consent" });
+    });
+    state.tokenClient.error_callback = finish((err) => {
+      reject(new Error(err?.message || err?.type || "Sign-in cancelled"));
+    });
+    const waitMs = prompt === "none" ? 4000 : 120000;
+    timer = setTimeout(
+      finish(() => reject(new Error("Sign-in timed out"))),
+      waitMs
+    );
+    state.tokenClient.requestAccessToken({ prompt: prompt ?? "" });
+  }).finally(() => {
+    tokenRequest = null;
   });
+  return tokenRequest;
+}
+
+async function ensureFreshToken() {
+  if (tokenIsFresh()) return;
+  await ensureTokenClient();
+  await requestToken({ prompt: "" });
+}
+
+function armGestureReconnect() {
+  disarmGestureReconnect();
+  if (!wantsSession() || !getClientId()) return;
+  const handler = async (ev) => {
+    if (ev.target.closest("#settings-modal, #modal-backdrop, #signout-btn, input, textarea, a")) {
+      return;
+    }
+    disarmGestureReconnect();
+    if (!wantsSession() || state.connected) return;
+    try {
+      await ensureTokenClient();
+      await requestToken({ prompt: "" });
+      await loadCalendars();
+      await loadGoogleEvents();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+  gestureReconnect = handler;
+  document.addEventListener("pointerdown", handler, true);
+}
+
+function disarmGestureReconnect() {
+  if (!gestureReconnect) return;
+  document.removeEventListener("pointerdown", gestureReconnect, true);
+  gestureReconnect = null;
+}
+
+async function loadConnectedCalendars() {
+  await loadCalendars();
+  await loadGoogleEvents();
+}
+
+async function trySilentConnect() {
+  await ensureTokenClient();
+  await requestToken({ prompt: "none" });
+  await loadConnectedCalendars();
+}
+
+async function restoreSession() {
+  if (!getClientId()) return;
+  const saved = readSavedToken();
+  if (saved) {
+    applySavedToken(saved);
+    renderAll();
+    try {
+      await ensureTokenClient();
+      await loadConnectedCalendars();
+      return;
+    } catch (err) {
+      console.error(err);
+      clearSavedToken();
+      state.connected = false;
+      state.calendars = DEMO_CALENDARS.slice();
+      state.events = demoEvents(state.startFriday);
+      renderAll();
+    }
+  }
+  if (!wantsSession()) return;
+  try {
+    await trySilentConnect();
+  } catch (err) {
+    console.error(err);
+    state.connected = false;
+    clearSavedToken();
+    state.calendars = DEMO_CALENDARS.slice();
+    state.events = demoEvents(state.startFriday);
+    renderAll();
+    armGestureReconnect();
+  }
 }
 
 async function connect() {
@@ -869,28 +1041,24 @@ async function connect() {
     openSettings();
     return;
   }
-  await waitForGis();
-  state.tokenClient = window.google.accounts.oauth2.initTokenClient({
-    client_id: clientId,
-    scope: "https://www.googleapis.com/auth/calendar.readonly",
-    callback: () => {},
-  });
-  await requestToken(false);
-  await loadCalendars();
-  await loadGoogleEvents();
+  await ensureTokenClient();
+  if (!tokenIsFresh()) {
+    await requestToken({ prompt: "" });
+  }
+  await loadConnectedCalendars();
 }
 
 function signOut() {
-  const clientId = getClientId();
+  disarmGestureReconnect();
   if (state.token && window.google?.accounts?.oauth2) {
     window.google.accounts.oauth2.revoke(state.token, () => {});
   }
-  state.token = null;
+  clearSavedToken();
+  localStorage.removeItem(STORAGE_SESSION);
   state.connected = false;
   state.tokenClient = null;
   state.calendars = DEMO_CALENDARS.slice();
   state.hidden = new Set();
-  void clientId;
   onViewChange();
 }
 
@@ -963,5 +1131,10 @@ function bind() {
 }
 
 bind();
-state.events = demoEvents(state.startFriday);
-renderAll();
+{
+  const saved = readSavedToken();
+  if (saved) applySavedToken(saved);
+  else state.events = demoEvents(state.startFriday);
+  renderAll();
+}
+restoreSession().catch((err) => console.error(err));
