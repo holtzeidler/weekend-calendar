@@ -358,6 +358,10 @@ a {
   padding: 8px 0 4px;
 }
 
+.dow.sat {
+  font-weight: 700;
+}
+
 .gap-head,
 .gap-cell {
   background: var(--gap);
@@ -439,6 +443,10 @@ a {
   background: var(--today);
   color: #fff;
   font-weight: 500;
+}
+
+.day-cell.saturday .date-num span {
+  font-weight: 700;
 }
 
 .timed-list {
