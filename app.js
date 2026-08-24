@@ -547,6 +547,14 @@ function weekendGroupHtml(weekend, today) {
     <div class="bars-layer"></div>`;
 }
 
+function startsNewMonth(weekend, previous) {
+  if (!previous) return false;
+  return (
+    weekend.friday.getMonth() !== previous.friday.getMonth() ||
+    weekend.friday.getFullYear() !== previous.friday.getFullYear()
+  );
+}
+
 function renderGrid() {
   const rowsEl = document.getElementById("weekend-rows");
   rowsEl.querySelectorAll(".days-wrap").forEach((wrap) => wrap._ro?.disconnect());
@@ -560,10 +568,12 @@ function renderGrid() {
   rowsEl.innerHTML = Array.from({ length: rowCount }, (_, rowIndex) => {
     const left = weekends[rowIndex];
     const right = weekends[rowIndex + rowCount];
+    const leftBreak = startsNewMonth(left, rowIndex > 0 ? weekends[rowIndex - 1] : null);
+    const rightBreak = startsNewMonth(right, rowIndex > 0 ? weekends[rowIndex + rowCount - 1] : null);
     return `<div class="weekend-row">
-      <div class="days-wrap">${weekendGroupHtml(left, today)}</div>
+      <div class="days-wrap${leftBreak ? " month-break" : ""}">${weekendGroupHtml(left, today)}</div>
       <div class="gap-cell"></div>
-      <div class="days-wrap">${weekendGroupHtml(right, today)}</div>
+      <div class="days-wrap${rightBreak ? " month-break" : ""}">${weekendGroupHtml(right, today)}</div>
     </div>`;
   }).join("");
 
