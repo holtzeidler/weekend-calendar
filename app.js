@@ -26,11 +26,19 @@ const MONTHS = [
 const DOW = ["S", "M", "T", "W", "T", "F", "S"];
 const WEEKENDS_SHOWN = 10;
 
+function upcomingFriday(from = new Date()) {
+  const day = startOfDay(from);
+  const dow = day.getDay();
+  if (dow === 5) return day;
+  if (dow === 6) return addDays(day, -1);
+  if (dow === 0) return addDays(day, -2);
+  return addDays(day, 5 - dow);
+}
+
 const state = {
-  year: new Date().getFullYear(),
-  month: new Date().getMonth(),
-  miniYear: new Date().getFullYear(),
-  miniMonth: new Date().getMonth(),
+  startFriday: upcomingFriday(),
+  miniYear: upcomingFriday().getFullYear(),
+  miniMonth: upcomingFriday().getMonth(),
   events: [],
   calendars: DEMO_CALENDARS.slice(),
   hidden: new Set(JSON.parse(localStorage.getItem(STORAGE_HIDDEN) || "[]")),
@@ -106,19 +114,8 @@ function getClientId() {
   ).trim();
 }
 
-function fridayOnOrBefore(d) {
-  const day = startOfDay(d);
-  const dow = day.getDay();
-  if (dow === 5) return day;
-  if (dow === 6) return addDays(day, -1);
-  if (dow === 0) return addDays(day, -2);
-  return addDays(day, -(dow + 2));
-}
-
-function weekendsInView(year, month) {
-  const first = startOfDay(new Date(year, month, 1));
-  let friday = fridayOnOrBefore(first);
-  if (addDays(friday, 2) < first) friday = addDays(friday, 7);
+function weekendsFrom(startFriday) {
+  const friday = startOfDay(startFriday);
   const weekends = [];
   for (let i = 0; i < WEEKENDS_SHOWN; i += 1) {
     const start = addDays(friday, i * 7);
@@ -128,6 +125,10 @@ function weekendsInView(year, month) {
     });
   }
   return weekends;
+}
+
+function weekendsInView() {
+  return weekendsFrom(state.startFriday);
 }
 
 function viewTitle(weekends) {
@@ -218,8 +219,8 @@ function layoutWeekend(days, events) {
   return { bars, timedByDay, laneCount: lanes.length };
 }
 
-function demoEvents(year, month) {
-  const weekends = weekendsInView(year, month);
+function demoEvents(startFriday) {
+  const weekends = weekendsFrom(startFriday);
   const events = [];
   let id = 0;
 
@@ -364,7 +365,7 @@ function renderMiniCal() {
   const lastDate = new Date(year, month + 1, 0).getDate();
   const today = new Date();
   const weekends = new Set(
-    weekendsInView(state.year, state.month).flatMap((w) => w.days.map(dateKey))
+    weekendsInView().flatMap((w) => w.days.map(dateKey))
   );
 
   let days = "";
@@ -409,12 +410,8 @@ function renderMiniCal() {
   });
   el.querySelectorAll(".mini-day").forEach((btn) => {
     btn.addEventListener("click", () => {
-      const [y, m] = btn.dataset.date.split("-").map(Number);
-      state.year = y;
-      state.month = m - 1;
-      state.miniYear = y;
-      state.miniMonth = m - 1;
-      onMonthChange();
+      const [y, m, day] = btn.dataset.date.split("-").map(Number);
+      goToFriday(upcomingFriday(new Date(y, m - 1, day)));
     });
   });
 }
@@ -520,7 +517,7 @@ function dateLabel(day) {
 }
 
 function dayCellHtml(day, today) {
-  const outside = day.getMonth() !== state.month;
+  const outside = day.getMonth() !== state.startFriday.getMonth();
   const todayClass = isSameDay(day, today) ? " today" : "";
   return `<div class="day-cell${outside ? " outside" : ""}${todayClass}">
     <div class="date-num"><span>${dateLabel(day)}</span></div>
@@ -536,7 +533,7 @@ function weekendGroupHtml(weekend, today) {
 function renderGrid() {
   const rowsEl = document.getElementById("weekend-rows");
   rowsEl.querySelectorAll(".days-wrap").forEach((wrap) => wrap._ro?.disconnect());
-  const weekends = weekendsInView(state.year, state.month);
+  const weekends = weekendsInView();
   const events = visibleEvents();
   const today = new Date();
   const rowCount = WEEKENDS_SHOWN / 2;
@@ -651,24 +648,26 @@ function hasOverflow(layout, maxSlots) {
   return layout.timedByDay.some((list) => layout.laneCount + list.length > maxSlots);
 }
 
-function goTo(year, month) {
-  const d = new Date(year, month, 1);
-  state.year = d.getFullYear();
-  state.month = d.getMonth();
-  state.miniYear = state.year;
-  state.miniMonth = state.month;
-  onMonthChange();
+function goToFriday(friday) {
+  state.startFriday = startOfDay(friday);
+  state.miniYear = state.startFriday.getFullYear();
+  state.miniMonth = state.startFriday.getMonth();
+  onViewChange();
 }
 
-function onMonthChange() {
+function shiftWeekends(count) {
+  goToFriday(addDays(state.startFriday, count * 7));
+}
+
+function onViewChange() {
   if (!state.connected) {
-    state.events = demoEvents(state.year, state.month);
+    state.events = demoEvents(state.startFriday);
     renderAll();
     return;
   }
   loadGoogleEvents().catch((err) => {
     console.error(err);
-    state.events = demoEvents(state.year, state.month);
+    state.events = demoEvents(state.startFriday);
     renderAll();
   });
 }
@@ -781,7 +780,7 @@ function colorFromId(colorId, calendar) {
 }
 
 async function loadGoogleEvents() {
-  const weekends = weekendsInView(state.year, state.month);
+  const weekends = weekendsInView();
   const timeMin = addDays(weekends[0].days[0], -1);
   const timeMax = addDays(weekends[weekends.length - 1].days[2], 2);
   const groups = await Promise.all(
@@ -865,7 +864,7 @@ function signOut() {
   state.calendars = DEMO_CALENDARS.slice();
   state.hidden = new Set();
   void clientId;
-  onMonthChange();
+  onViewChange();
 }
 
 function openSettings() {
@@ -882,11 +881,10 @@ function closeSettings() {
 
 function bind() {
   document.getElementById("today-btn").addEventListener("click", () => {
-    const now = new Date();
-    goTo(now.getFullYear(), now.getMonth());
+    goToFriday(upcomingFriday());
   });
-  document.getElementById("prev-btn").addEventListener("click", () => goTo(state.year, state.month - 1));
-  document.getElementById("next-btn").addEventListener("click", () => goTo(state.year, state.month + 1));
+  document.getElementById("prev-btn").addEventListener("click", () => shiftWeekends(-1));
+  document.getElementById("next-btn").addEventListener("click", () => shiftWeekends(1));
   document.getElementById("connect-btn").addEventListener("click", () => {
     if (state.connected) openSettings();
     else if (getClientId()) connect().catch((err) => {
@@ -931,12 +929,12 @@ function bind() {
       closeSettings();
     }
     if (ev.target.matches("input, textarea")) return;
-    if (ev.key === "ArrowLeft") goTo(state.year, state.month - 1);
-    if (ev.key === "ArrowRight") goTo(state.year, state.month + 1);
+    if (ev.key === "ArrowLeft") shiftWeekends(-1);
+    if (ev.key === "ArrowRight") shiftWeekends(1);
   });
   window.addEventListener("resize", () => renderGrid());
 }
 
 bind();
-state.events = demoEvents(state.year, state.month);
+state.events = demoEvents(state.startFriday);
 renderAll();
